@@ -5,12 +5,12 @@ import logging
 import random
 import time
 import uuid
-from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, NoReturn
+from typing import Annotated, Any, Literal, NoReturn
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt, ValidationError
 
 from app.config import Settings
 from app.quotes.pricing import rate_for_band, total_commission
@@ -18,8 +18,6 @@ from app.quotes.pricing import rate_for_band, total_commission
 logger = logging.getLogger("vendor_mock")
 router = APIRouter()
 
-FIELDS = {"loanAmount", "loanTermInMonths", "riskBand"}
-RISK_BANDS = {"LOW", "MEDIUM", "HIGH"}
 FAULT_STATUSES = (500, 502, 503)
 
 
@@ -27,10 +25,21 @@ class InvalidBody(Exception):
     pass
 
 
-@dataclass(frozen=True)
-class QuoteRequest:
-    loan_amount: Decimal
-    risk_band: str
+def _json_number(value: Any) -> Decimal:
+    # Pydantic's Decimal also accepts numeric strings, even in strict mode.
+    if isinstance(value, bool) or not isinstance(value, int | Decimal):
+        raise ValueError("must be a JSON number")
+    return Decimal(value)
+
+
+class QuoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    loan_amount: Annotated[
+        Decimal, BeforeValidator(_json_number), Field(gt=0, allow_inf_nan=False)
+    ] = Field(alias="loanAmount")
+    loan_term_in_months: Annotated[StrictInt, Field(gt=0)] = Field(alias="loanTermInMonths")
+    risk_band: Literal["LOW", "MEDIUM", "HIGH"] = Field(alias="riskBand")
 
 
 def _key_is_valid(request: Request, expected: str) -> bool:
@@ -51,19 +60,11 @@ def _parse_body(body: bytes, content_type: str) -> QuoteRequest:
         data: Any = json.loads(body, parse_float=Decimal, parse_constant=_reject_constant)
     except (ValueError, ArithmeticError, RecursionError) as error:
         raise InvalidBody("Body is not valid JSON") from error
-    if not isinstance(data, dict):
-        raise InvalidBody("Body must be a JSON object")
-    if set(data) != FIELDS:
-        raise InvalidBody("Body must hold exactly loanAmount, loanTermInMonths and riskBand")
-
-    amount, term, risk_band = data["loanAmount"], data["loanTermInMonths"], data["riskBand"]
-    if isinstance(amount, bool) or not isinstance(amount, int | Decimal) or amount <= 0:
-        raise InvalidBody("loanAmount must be a number greater than 0")
-    if isinstance(term, bool) or not isinstance(term, int) or term <= 0:
-        raise InvalidBody("loanTermInMonths must be an integer greater than 0")
-    if not isinstance(risk_band, str) or risk_band not in RISK_BANDS:
-        raise InvalidBody("riskBand must be LOW, MEDIUM or HIGH")
-    return QuoteRequest(Decimal(amount), risk_band)
+    try:
+        return QuoteRequest.model_validate(data)
+    except ValidationError as error:
+        fields = ", ".join(sorted({str(item["loc"][0]) for item in error.errors() if item["loc"]}))
+        raise InvalidBody(f"Invalid request body: {fields or 'not a JSON object'}") from error
 
 
 def _quote_response(rate: Decimal, total: Decimal) -> Response:

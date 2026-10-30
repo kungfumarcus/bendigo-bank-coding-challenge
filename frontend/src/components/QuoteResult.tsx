@@ -11,7 +11,7 @@ export function QuoteResult({ quote }: { quote: Quote }) {
         <dt>Commission rate</dt>
         <dd>{formatPercent(quote.commissionRate)}</dd>
         <dt>Total commission</dt>
-        <dd>{formatMoney(quote.totalCommission)}</dd>
+        <dd>{formatMoney(Number(quote.totalCommission))}</dd>
       </dl>
     </section>
   );

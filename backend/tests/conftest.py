@@ -9,7 +9,7 @@ from app.config import LoadedConfig, Settings
 from app.factory import create_app
 
 KEY = "test-key"
-VALID_BODY = {"loanAmount": 1000, "loanTermInMonths": 12, "riskBand": "MEDIUM"}
+VALID_BODY = {"loanAmount": "1000", "loanTermInMonths": 12, "riskBand": "MEDIUM"}
 GOOD_REPLY = b'{"quoteId":"q-1","commissionRate":0.015,"totalCommission":15.00}'
 
 Handler = Callable[[httpx.Request], Coroutine[None, None, httpx.Response]]

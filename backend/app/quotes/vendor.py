@@ -2,12 +2,13 @@ import asyncio
 import logging
 import random
 import time
-from decimal import Decimal
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from app.quotes.models import (
+    DECODE_ERRORS,
     LoanDetails,
     Quote,
     QuoteError,
@@ -100,19 +101,6 @@ def _read_reply(response: httpx.Response) -> Quote:
     if status != 200:
         raise VendorBadResponse
     try:
-        data = loads_exact(response.content)
-    except (ValueError, RecursionError) as error:
+        return Quote.model_validate(loads_exact(response.content))
+    except (*DECODE_ERRORS, ValidationError) as error:
         raise VendorBadResponse from error
-    if not isinstance(data, dict) or not isinstance(data.get("quoteId"), str):
-        raise VendorBadResponse
-    return Quote(
-        quote_id=data["quoteId"],
-        commission_rate=_amount(data.get("commissionRate")),
-        total_commission=_amount(data.get("totalCommission")),
-    )
-
-
-def _amount(value: Any) -> Decimal:
-    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
-        raise VendorBadResponse
-    return value

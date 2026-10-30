@@ -13,7 +13,7 @@ export type QuoteStatus =
   | { available: true; limits: Limits; requestTimeoutSeconds: number };
 
 export interface QuoteRequest {
-  loanAmount: number;
+  loanAmount: string;
   loanTermInMonths: number;
   riskBand: RiskBand;
 }
@@ -21,7 +21,7 @@ export interface QuoteRequest {
 export interface Quote {
   quoteId: string;
   commissionRate: number;
-  totalCommission: number;
+  totalCommission: string;
 }
 
 export interface ApiFieldError {
@@ -85,12 +85,21 @@ export async function fetchQuoteStatus(): Promise<QuoteStatus> {
   return parseStatus(await response.json());
 }
 
+function isDecimalString(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9]+(\.[0-9]+)?$/.test(value) &&
+    Number.isFinite(Number(value))
+  );
+}
+
 function isQuote(value: unknown): value is Quote {
   return (
     isRecord(value) &&
     typeof value.quoteId === "string" &&
+    value.quoteId !== "" &&
     isFiniteNumber(value.commissionRate) &&
-    isFiniteNumber(value.totalCommission)
+    isDecimalString(value.totalCommission)
   );
 }
 

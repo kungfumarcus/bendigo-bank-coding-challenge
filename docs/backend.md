@@ -4,9 +4,9 @@ The FastAPI service between the frontend and the vendor. It validates input, hol
 
 ## Layers
 
-- **API** (`app/api/`) — HTTP only: parses requests into models (shape and types), calls the service, maps domain errors to error codes and statuses; no business decisions
+- **API** (`app/api/`) — HTTP only: parses requests into Pydantic models (shape and types), calls the service, maps domain errors to error codes and statuses; no business decisions
 - **Business** (`app/quotes/service.py`) — whether quotes can be served, business bounds, asks the vendor client for a quote; raises domain errors; knows nothing about HTTP
-- **Vendor client** (`app/quotes/vendor.py`) — implements the `VendorClient` port: sends the key in the `api-key` header, never follows redirects (a redirect could send the key to another host), applies timeout and retry, checks replies against the contract, raises typed vendor errors
+- **Vendor client** (`app/quotes/vendor.py`) — implements the `VendorClient` port: sends the key in the `api-key` header, never follows redirects (a redirect could send the key to another host), applies timeout and retry, checks replies against the contract with a Pydantic model, raises typed vendor errors
 - **Config** (`app/config.py`) — loads settings and reports which are missing or invalid
 
 The service depends on the `VendorClient` port, so tests inject a fake and the real vendor needs only a new URL and key.
@@ -15,7 +15,9 @@ The service depends on the `VendorClient` port, so tests inject a fake and the r
 backend/
   app/
     main.py
+    factory.py
     config.py
+    log.py
     api/quotes.py
     quotes/models.py
     quotes/service.py
@@ -33,7 +35,7 @@ backend/
 - `requestTimeoutSeconds` — how long the frontend waits for `POST /api/v1/quotes`, from `FRONTEND_REQUEST_TIMEOUT_SECONDS`; null when unavailable
 - `limits` — `loanAmountMin`, `loanAmountMax`, `loanAmountMaxDecimals`, `loanTermMonthsMin`, `loanTermMonthsMax`, all JSON numbers; null when unavailable
 
-`POST /api/v1/quotes` — request and 200 response mirror the vendor contract; the vendor's `quoteId`, `commissionRate` and `totalCommission` pass through unchanged, as JSON numbers for the two amounts. The backend first checks it can serve quotes, then validates, then calls the vendor. The availability check runs before any body validation, so an unavailable backend returns `QUOTES_UNAVAILABLE` whatever the body.
+`POST /api/v1/quotes` — request and 200 response use the vendor contract's field names. `loanAmount` and `totalCommission` are decimal strings on this API and JSON numbers to and from the vendor ([`vendor-api.md`](vendor-api.md)); `commissionRate` is a JSON number and `loanTermInMonths` a JSON integer. `totalCommission` is the vendor's value in plain non-negative decimal notation, with no exponent (`"15.00"`, `"1500"`). The backend never converts money through a float: JSON is decoded with `Decimal` first and then validated by a Pydantic model, and a small exact writer sends JSON numbers. The backend first checks it can serve quotes, then validates, then calls the vendor. The availability check runs before any body validation, so an unavailable backend returns `QUOTES_UNAVAILABLE` whatever the body.
 
 ## Request ID
 
@@ -54,16 +56,18 @@ backend/
 Shape and types (API layer):
 
 - All three fields required; extra fields rejected
-- `loanAmount` — a JSON number; strings, booleans, `NaN` and `Infinity` rejected; parsed as a `Decimal` from the number as sent and forwarded to the vendor as a JSON number, never via a float
-- `loanTermInMonths` — a JSON integer; strings, booleans, and decimals such as `12.5` and `12.0` rejected
+- `loanAmount` — a JSON string that fully matches `-?[0-9]+(\.[0-9]+)?`, ASCII digits only (`"1234.50"`, `"007"`); JSON numbers, booleans, exponents, `"+1"`, `"1."`, `"1_000"`, `" 1"` and `""` rejected
+- `loanTermInMonths` — a JSON integer; strings, booleans, and numbers such as `12.5`, `12.0` and `1e2` rejected
 - `riskBand` — exactly `LOW`, `MEDIUM` or `HIGH`
 
 Business bounds (business layer), inclusive, from config:
 
-- `loanAmount` between `LOAN_AMOUNT_MIN` and `LOAN_AMOUNT_MAX`, with at most `LOAN_AMOUNT_MAX_DECIMALS` decimal places, counted on that `Decimal`
+- `loanAmount` between `LOAN_AMOUNT_MIN` and `LOAN_AMOUNT_MAX`, with at most `LOAN_AMOUNT_MAX_DECIMALS` decimal places, counted on that `Decimal` ignoring trailing zeros (`"1.100"` has 1)
 - `loanTermInMonths` between `LOAN_TERM_MONTHS_MIN` and `LOAN_TERM_MONTHS_MAX`
 - Zero and negative amounts and terms always fail the range check, since both minimums must be above 0
-- Numbers of any size in either field, however many digits or however large the exponent (e.g. `1e999999`, or a term thousands of digits long), fail the range check as `VALIDATION_FAILED`, never `INTERNAL_ERROR`
+- A `loanAmount` string of any length that matches the format, if out of bounds, fails the range check
+- A number in the body that the JSON decoder rejects as too large makes the body unparseable (status 400, below); any `loanTermInMonths` the decoder accepts, if out of bounds, fails the range check
+- None of these ever returns `INTERNAL_ERROR`
 
 Both return `VALIDATION_FAILED` with one entry per failing field.
 
@@ -71,7 +75,7 @@ Both return `VALIDATION_FAILED` with one entry per failing field.
 - Shape errors are returned first; business bounds are checked only when the whole body's shape is valid, so a shape error on any field means no bound errors are returned
 - `fields[].field` is the request field's name: `loanAmount`, `loanTermInMonths`, `riskBand`, or the name of an extra field
 - `fields[].code` names the failed rule: `REQUIRED`, `NOT_A_NUMBER`, `TOO_MANY_DECIMALS`, `OUT_OF_RANGE`, `INVALID_VALUE` or `UNKNOWN_FIELD`
-- A `loanAmount` of the wrong JSON type gets `NOT_A_NUMBER`; a `loanTermInMonths` of the wrong type or with decimals, or an unknown `riskBand`, gets `INVALID_VALUE`
+- A `loanAmount` that is not a JSON string, or is a string not in the format above, gets `NOT_A_NUMBER`; a `loanTermInMonths` of the wrong type or with decimals, or an unknown `riskBand`, gets `INVALID_VALUE`
 - Field names may be echoed in `fields[].field`, but submitted values never are
 - A body that is not valid JSON, not a JSON object (`[]`, `null`, a string), or sent without a JSON `Content-Type` (e.g. form-encoded; `application/json` with or without a `charset` parameter is accepted), returns `VALIDATION_FAILED` with status 400 and no `fields`
 
@@ -80,9 +84,8 @@ Both return `VALIDATION_FAILED` with one entry per failing field.
 - Each attempt times out after `VENDOR_TIMEOUT_SECONDS`, a total deadline covering connect and the whole response; the HTTP client's per-phase timeouts alone do not meet this
 - Retried up to `VENDOR_MAX_RETRIES` times: connection error, timeout, any 5xx
 - Never retried: any 4xx (including 408 and 429), or a bad response
-- The vendor's reply is parsed with `Decimal`, so `commissionRate` and `totalCommission` reach our response without any float conversion
 - Backoff before a retry: `VENDOR_RETRY_BACKOFF_MS`, plus random jitter of up to half that
-- A 200 whose body breaks the contract is a bad response: `quoteId` missing or not a string; `commissionRate` or `totalCommission` missing, negative, or not a JSON number — numeric strings such as `"0.015"`, booleans, `NaN` and `Infinity` all count as not a number
+- A 200 whose body breaks the contract is a bad response: `quoteId` missing, empty or not a string; `commissionRate` or `totalCommission` missing, negative, or not a JSON number — numeric strings such as `"0.015"`, booleans, `NaN` and `Infinity` all count as not a number
 - A 4xx other than 401, any 3xx, a 2xx other than 200, or a 200 whose body cannot be decoded (e.g. a corrupt `Content-Encoding`) or is not JSON, is also a bad response
 - When retries run out, the error code follows the last attempt
 - A vendor 504 is a vendor reply, so it maps to `VENDOR_UNAVAILABLE`; `VENDOR_TIMEOUT` is only for our own timeout
@@ -144,6 +147,7 @@ With code defaults:
 Vendor faked with an httpx mock transport.
 
 - Validation — a table of invalid inputs, each returning `VALIDATION_FAILED` with field errors; it includes a body that is not JSON and a body that is `[]`
+- Number formats — a JSON number `loanAmount` returns `NOT_A_NUMBER`; the vendor receives `loanAmount` as a JSON number; our response has `totalCommission` as a string
 - Missing config — a missing key reports `available: false`, and `POST` returns `QUOTES_UNAVAILABLE`
 - Retry — 5xx then success returns the quote; persistent 5xx returns `VENDOR_UNAVAILABLE`; a persistent vendor 504 returns `VENDOR_UNAVAILABLE`; persistent timeout returns `VENDOR_TIMEOUT`; 401 is not retried and returns `VENDOR_AUTH_FAILED`
 - Bad response — a 200 that breaks the contract returns `VENDOR_BAD_RESPONSE`; the cases include `NaN` for `totalCommission`

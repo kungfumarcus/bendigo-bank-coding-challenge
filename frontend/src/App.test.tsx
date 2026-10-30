@@ -170,7 +170,7 @@ describe("success", () => {
         json({
           quoteId: "q-1",
           commissionRate: 0.015,
-          totalCommission: 1234.5,
+          totalCommission: "1234.50",
         }),
     );
     const user = userEvent.setup();
@@ -184,7 +184,7 @@ describe("success", () => {
     expect(screen.getByText("$1,234.50")).toBeInTheDocument();
     const init = quoteCalls(fetchMock)[0]![1];
     expect(JSON.parse(init?.body as string)).toEqual({
-      loanAmount: 1234.5,
+      loanAmount: "1234.5",
       loanTermInMonths: 12,
       riskBand: "MEDIUM",
     });
@@ -208,7 +208,7 @@ describe("success", () => {
     expect(button.closest("form")).toHaveAttribute("aria-busy", "true");
 
     finish(
-      json({ quoteId: "q-1", commissionRate: 0.015, totalCommission: 15 }),
+      json({ quoteId: "q-1", commissionRate: 0.015, totalCommission: "15.00" }),
     );
     expect(await screen.findByText("q-1")).toBeInTheDocument();
 
@@ -298,6 +298,61 @@ describe("errors", () => {
           },
           422,
         ),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await fillValidForm(user);
+
+    await user.click(screen.getByRole("button", { name: "Generate Quote" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Something went wrong. Please try again.",
+    );
+  });
+
+  it.each([
+    [
+      "a blank total",
+      { quoteId: "q", commissionRate: 0.01, totalCommission: "" },
+    ],
+    [
+      "a numeric total",
+      { quoteId: "q", commissionRate: 0.01, totalCommission: 15 },
+    ],
+    [
+      "an exponent",
+      { quoteId: "q", commissionRate: 0.01, totalCommission: "1E+3" },
+    ],
+    [
+      "a negative",
+      { quoteId: "q", commissionRate: 0.01, totalCommission: "-1" },
+    ],
+    [
+      "an empty ID",
+      { quoteId: "", commissionRate: 0.01, totalCommission: "1" },
+    ],
+  ])("treats a quote with %s as an error", async (_, quote) => {
+    mockFetch(
+      async () => json(STATUS),
+      async () => json(quote),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await fillValidForm(user);
+
+    await user.click(screen.getByRole("button", { name: "Generate Quote" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Something went wrong. Please try again.",
+    );
+    expect(screen.queryByText("Your quote")).not.toBeInTheDocument();
+  });
+
+  it("shows the generic message for a code named after an Object.prototype member", async () => {
+    mockFetch(
+      async () => json(STATUS),
+      async () =>
+        json({ error: { code: "constructor", requestId: "req-1" } }, 502),
     );
     const user = userEvent.setup();
     render(<App />);

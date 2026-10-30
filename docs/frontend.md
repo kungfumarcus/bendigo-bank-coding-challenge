@@ -37,7 +37,7 @@ frontend/src/
 - A valid amount is digits, optionally followed by `.` and at least one more digit: `007` and `1.5` pass; `.5`, `1.` and `1.2.3` are not a number
 - Decimal places are counted on the text as typed, so `1.100` has 3; this is slightly stricter than the backend, which is fine
 - Each field shows only its first failing check: empty first, then the order in [`backend.md`](backend.md) § Validation
-- The amount is sent as a JSON number and the term as a JSON integer, both built from the validated text (`007` is sent as `7`)
+- The amount is sent as the validated text unchanged (`007` is sent as `"007"`), and the term as an integer built from the validated text (`007` is sent as `7`); types are in [`backend.md`](backend.md) § Endpoints
 
 Field error messages, used both for the frontend's own checks and for the matching server `fields[].code`, with `$min` and `$max` formatted as money (e.g. `$1.00`, `$10,000,000.00`) and term limits and `N` as plain whole numbers (e.g. "between 1 and 360 months"):
 
@@ -61,6 +61,8 @@ Field error messages, used both for the frontend's own checks and for the matchi
 - Quote ID
 - Commission rate as a percentage with 2 decimal places, e.g. `1.50%`
 - Total commission as `$` with comma separators and 2 decimal places, e.g. `$1,234.56`; the vendor has already rounded it, so the frontend only formats and never rounds again
+- Total commission is converted to a number only to format it for display
+- A valid quote has a non-empty `quoteId`, a finite number for `commissionRate`, and a `totalCommission` string fully matching `[0-9]+(\.[0-9]+)?` that converts to a finite number; anything else is treated as in Errors
 
 ## Errors
 
@@ -77,7 +79,7 @@ Messages by code:
 - `VENDOR_UNAVAILABLE` — "The quote service is having problems. Please try again."
 - `VENDOR_TIMEOUT` — "The quote service took too long to respond. Please try again."
 - `VENDOR_BAD_RESPONSE` — "The quote service returned an unexpected response. Please try again."
-- `INTERNAL_ERROR`, an unknown code, or no response — "Something went wrong. Please try again."
+- `INTERNAL_ERROR`, an unknown code, no response, or a success response that is not a valid quote — "Something went wrong. Please try again."
 
 ## Tests
 

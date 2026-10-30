@@ -1,15 +1,16 @@
 import json
 import logging
 import time
-from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
+from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 
 from app.log import request_id_var
 from app.quotes.models import (
+    DECODE_ERRORS,
     FieldError,
-    JsonInteger,
     LoanDetails,
     MalformedBody,
     QuoteError,
@@ -26,9 +27,6 @@ from app.quotes.service import QuoteService
 
 logger = logging.getLogger("backend.quotes")
 router = APIRouter(prefix="/api/v1")
-
-RISK_BANDS = {"LOW", "MEDIUM", "HIGH"}
-FIELDS = {"loanAmount", "loanTermInMonths", "riskBand"}
 
 ERROR_CODES: dict[type[QuoteError], tuple[str, int]] = {
     ValidationFailed: ("VALIDATION_FAILED", 422),
@@ -57,29 +55,23 @@ def parse_loan_details(body: bytes, content_type: str) -> LoanDetails:
         raise MalformedBody
     try:
         data = loads_exact(body)
-    except (ValueError, RecursionError) as error:
+    except DECODE_ERRORS as error:
         raise MalformedBody from error
     if not isinstance(data, dict):
         raise MalformedBody
+    try:
+        return LoanDetails.model_validate(data)
+    except ValidationError as error:
+        raise ValidationFailed([_field_error(item) for item in error.errors()]) from error
 
-    errors = [FieldError(name, "UNKNOWN_FIELD") for name in data if name not in FIELDS]
-    errors += [FieldError(name, "REQUIRED") for name in sorted(FIELDS) if name not in data]
-    amount, term, risk_band = (
-        data.get("loanAmount"),
-        data.get("loanTermInMonths"),
-        data.get("riskBand"),
-    )
-    if "loanAmount" in data and not isinstance(amount, Decimal):
-        errors.append(FieldError("loanAmount", "NOT_A_NUMBER"))
-    if "loanTermInMonths" in data and not isinstance(term, JsonInteger):
-        errors.append(FieldError("loanTermInMonths", "INVALID_VALUE"))
-    if "riskBand" in data and (not isinstance(risk_band, str) or risk_band not in RISK_BANDS):
-        errors.append(FieldError("riskBand", "INVALID_VALUE"))
-    if errors:
-        raise ValidationFailed(errors)
-    assert isinstance(amount, Decimal) and isinstance(term, Decimal)
-    assert isinstance(risk_band, str)
-    return LoanDetails(amount, term, risk_band)
+
+def _field_error(error: ErrorDetails) -> FieldError:
+    name = str(error["loc"][0])
+    if error["type"] == "missing":
+        return FieldError(name, "REQUIRED")
+    if error["type"] == "extra_forbidden":
+        return FieldError(name, "UNKNOWN_FIELD")
+    return FieldError(name, "NOT_A_NUMBER" if name == "loanAmount" else "INVALID_VALUE")
 
 
 @router.get("/health")
@@ -119,7 +111,7 @@ async def create_quote(request: Request) -> Response:
         loan = parse_loan_details(await request.body(), request.headers.get("content-type", ""))
         fields = {
             "loanAmount": str(loan.loan_amount),
-            "loanTermInMonths": str(loan.loan_term_in_months),
+            "loanTermInMonths": loan.loan_term_in_months,
             "riskBand": loan.risk_band,
         }
         quote = await service.get_quote(loan)
@@ -128,7 +120,7 @@ async def create_quote(request: Request) -> Response:
             {
                 "quoteId": quote.quote_id,
                 "commissionRate": quote.commission_rate,
-                "totalCommission": quote.total_commission,
+                "totalCommission": format(quote.total_commission, "f"),
             }
         )
     except QuoteError as error:

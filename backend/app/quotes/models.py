@@ -1,20 +1,15 @@
 import json
+import re
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
-from typing import Any, NoReturn, Protocol
+from decimal import Decimal
+from typing import Annotated, Any, Literal, NoReturn, Protocol
 
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt, StrictStr
 
-class JsonInteger(Decimal):
-    """A number written in JSON without a fraction or exponent."""
+# What loads_exact raises on a body it can't decode, including a number too large for it.
+DECODE_ERRORS = (ValueError, ArithmeticError, RecursionError)
 
-
-def _parse_float(text: str) -> Decimal:
-    try:
-        return Decimal(text)
-    except InvalidOperation:
-        # Exponent too large even for Decimal. Infinity can't be sent any other way, as the
-        # constants are rejected, and it fails every range check and every vendor reply check.
-        return Decimal("Infinity")
+_DECIMAL_STRING = re.compile(r"-?[0-9]+(\.[0-9]+)?")
 
 
 def _reject_constant(name: str) -> NoReturn:
@@ -22,14 +17,12 @@ def _reject_constant(name: str) -> NoReturn:
 
 
 def loads_exact(body: bytes) -> Any:
-    """Parse JSON keeping numbers as Decimal. Raises ValueError or RecursionError."""
-    return json.loads(
-        body, parse_float=_parse_float, parse_int=JsonInteger, parse_constant=_reject_constant
-    )
+    """Decode JSON with fractions as Decimal; Pydantic alone would read them through a float."""
+    return json.loads(body, parse_float=Decimal, parse_constant=_reject_constant)
 
 
 def dumps_exact(value: Any) -> str:
-    """Write JSON with each Decimal as the number it holds, never via a float."""
+    """Write JSON with each Decimal as the number it holds; Pydantic would write a string."""
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, dict):
@@ -38,18 +31,38 @@ def dumps_exact(value: Any) -> str:
     return json.dumps(value)
 
 
-@dataclass(frozen=True)
-class LoanDetails:
-    loan_amount: Decimal
-    loan_term_in_months: Decimal
-    risk_band: str
+def _decimal_string(value: Any) -> Decimal:
+    if not isinstance(value, str) or not _DECIMAL_STRING.fullmatch(value):
+        raise ValueError("must be a decimal string")
+    return Decimal(value)
 
 
-@dataclass(frozen=True)
-class Quote:
-    quote_id: str
-    commission_rate: Decimal
-    total_commission: Decimal
+def _json_number(value: Any) -> Decimal:
+    # Pydantic's Decimal also accepts numeric strings, even in strict mode.
+    if isinstance(value, bool) or not isinstance(value, int | Decimal):
+        raise ValueError("must be a JSON number")
+    return Decimal(value)
+
+
+VendorAmount = Annotated[Decimal, BeforeValidator(_json_number), Field(ge=0, allow_inf_nan=False)]
+
+
+class LoanDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    loan_amount: Annotated[Decimal, BeforeValidator(_decimal_string)] = Field(alias="loanAmount")
+    loan_term_in_months: StrictInt = Field(alias="loanTermInMonths")
+    risk_band: Literal["LOW", "MEDIUM", "HIGH"] = Field(alias="riskBand")
+
+
+class Quote(BaseModel):
+    """The vendor's reply, checked against the contract."""
+
+    model_config = ConfigDict(frozen=True)
+
+    quote_id: Annotated[StrictStr, Field(min_length=1)] = Field(alias="quoteId")
+    commission_rate: VendorAmount = Field(alias="commissionRate")
+    total_commission: VendorAmount = Field(alias="totalCommission")
 
 
 @dataclass(frozen=True)

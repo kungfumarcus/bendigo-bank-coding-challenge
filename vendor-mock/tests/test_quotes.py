@@ -28,7 +28,7 @@ def make_client(**overrides: Any) -> TestClient:
 
 @pytest.mark.parametrize("headers", [{}, {"api-key": "wrong"}, {"api-key": "wé"}])
 def test_missing_or_wrong_key_returns_401(headers: dict[str, str]) -> None:
-    encoded = {name: value.encode("latin-1") for name, value in headers.items()}
+    encoded = {name.encode(): value.encode("latin-1") for name, value in headers.items()}
     response = make_client().post("/commission-quotes", json=VALID_BODY, headers=encoded)
     assert response.status_code == 401
     assert response.json() == {"error": "Unauthorized"}

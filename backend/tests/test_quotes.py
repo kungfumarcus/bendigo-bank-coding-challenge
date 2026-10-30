@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,11 +16,8 @@ from app.quotes.service import decimal_places
 from tests.conftest import GOOD_REPLY, KEY, VALID_BODY, ClientFactory, make_settings
 
 
-def post_raw(client: TestClient, body: bytes) -> httpx.Response:
-    response: httpx.Response = client.post(
-        "/api/v1/quotes", content=body, headers={"content-type": "application/json"}
-    )
-    return response
+def post_raw(client: TestClient, body: bytes) -> httpx2.Response:
+    return client.post("/api/v1/quotes", content=body, headers={"content-type": "application/json"})
 
 
 async def good_vendor(_: httpx.Request) -> httpx.Response:
@@ -32,19 +30,41 @@ async def good_vendor(_: httpx.Request) -> httpx.Response:
 def test_quote_passes_through_vendor_values_exactly(client_for: ClientFactory) -> None:
     response = client_for(good_vendor).post("/api/v1/quotes", json=VALID_BODY)
     assert response.status_code == 200
-    assert response.text == '{"quoteId":"q-1","commissionRate":0.015,"totalCommission":15.00}'
+    assert response.text == '{"quoteId":"q-1","commissionRate":0.015,"totalCommission":"15.00"}'
 
 
-def test_vendor_gets_key_and_exact_number(client_for: ClientFactory) -> None:
+def test_vendor_exponent_is_written_out_in_total(client_for: ClientFactory) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b'{"quoteId":"q-1","commissionRate":0.015,"totalCommission":1.5E+3}'
+        )
+
+    response = client_for(handler).post("/api/v1/quotes", json=VALID_BODY)
+    assert response.json()["totalCommission"] == "1500"
+
+
+def test_vendor_digits_survive_beyond_float_precision(client_for: ClientFactory) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'{"quoteId":"q","commissionRate":0.12345678901234567890123,'
+            b'"totalCommission":1.12345678901234567890123}',
+        )
+
+    response = client_for(handler).post("/api/v1/quotes", json=VALID_BODY)
+    assert '"commissionRate":0.12345678901234567890123' in response.text
+    assert '"totalCommission":"1.12345678901234567890123"' in response.text
+
+
+def test_vendor_gets_key_and_amount_as_exact_json_number(client_for: ClientFactory) -> None:
     seen: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return httpx.Response(200, content=GOOD_REPLY)
 
-    # 1234567.89 is not exactly representable as a float.
     response = post_raw(
-        client_for(handler), b'{"loanAmount":1234567.89,"loanTermInMonths":12,"riskBand":"LOW"}'
+        client_for(handler), b'{"loanAmount":"1234567.89","loanTermInMonths":12,"riskBand":"LOW"}'
     )
     assert response.status_code == 200
     assert seen[0].headers["api-key"] == KEY
@@ -80,7 +100,7 @@ def test_status_reports_limits(client_for: ClientFactory) -> None:
 
 
 def body_with(**changes: Any) -> bytes:
-    body = {"loanAmount": "1000", "loanTermInMonths": "12", "riskBand": '"LOW"', **changes}
+    body = {"loanAmount": '"1000"', "loanTermInMonths": "12", "riskBand": '"LOW"', **changes}
     return ("{" + ",".join(f'"{k}":{v}' for k, v in body.items()) + "}").encode()
 
 
@@ -97,32 +117,43 @@ def body_with(**changes: Any) -> bytes:
             ],
         ),
         (body_with(extra="1"), [("extra", "UNKNOWN_FIELD")]),
-        (body_with(loanAmount='"1000"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount="1000"), [("loanAmount", "NOT_A_NUMBER")]),
         (body_with(loanAmount="true"), [("loanAmount", "NOT_A_NUMBER")]),
         (body_with(loanAmount="null"), [("loanAmount", "NOT_A_NUMBER")]),
-        (body_with(loanAmount="1.234"), [("loanAmount", "TOO_MANY_DECIMALS")]),
-        (body_with(loanAmount="0.999"), [("loanAmount", "TOO_MANY_DECIMALS")]),
-        (body_with(loanAmount="0"), [("loanAmount", "OUT_OF_RANGE")]),
-        (body_with(loanAmount="-5"), [("loanAmount", "OUT_OF_RANGE")]),
-        (body_with(loanAmount="10000000.01"), [("loanAmount", "OUT_OF_RANGE")]),
-        (body_with(loanAmount="1e999999"), [("loanAmount", "OUT_OF_RANGE")]),
-        (body_with(loanAmount="1e99999999999999999999"), [("loanAmount", "OUT_OF_RANGE")]),
-        (body_with(loanAmount="9" * 5000), [("loanAmount", "OUT_OF_RANGE")]),
+        (body_with(loanAmount='""'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"abc"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"NaN"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"Infinity"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"1e3"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"+1"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"1."'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='".5"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"1_000"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='" 1"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"1\\n"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"١٢"'), [("loanAmount", "NOT_A_NUMBER")]),
+        (body_with(loanAmount='"1.234"'), [("loanAmount", "TOO_MANY_DECIMALS")]),
+        (body_with(loanAmount='"0.999"'), [("loanAmount", "TOO_MANY_DECIMALS")]),
+        (body_with(loanAmount='"0"'), [("loanAmount", "OUT_OF_RANGE")]),
+        (body_with(loanAmount='"-5"'), [("loanAmount", "OUT_OF_RANGE")]),
+        (body_with(loanAmount='"10000000.01"'), [("loanAmount", "OUT_OF_RANGE")]),
+        (body_with(loanAmount=f'"{"9" * 5000}"'), [("loanAmount", "OUT_OF_RANGE")]),
         (body_with(loanTermInMonths="12.5"), [("loanTermInMonths", "INVALID_VALUE")]),
         (body_with(loanTermInMonths="12.0"), [("loanTermInMonths", "INVALID_VALUE")]),
+        (body_with(loanTermInMonths="1e2"), [("loanTermInMonths", "INVALID_VALUE")]),
         (body_with(loanTermInMonths='"12"'), [("loanTermInMonths", "INVALID_VALUE")]),
         (body_with(loanTermInMonths="true"), [("loanTermInMonths", "INVALID_VALUE")]),
         (body_with(loanTermInMonths="0"), [("loanTermInMonths", "OUT_OF_RANGE")]),
         (body_with(loanTermInMonths="361"), [("loanTermInMonths", "OUT_OF_RANGE")]),
-        (body_with(loanTermInMonths="9" * 5000), [("loanTermInMonths", "OUT_OF_RANGE")]),
+        (body_with(loanTermInMonths="9" * 4300), [("loanTermInMonths", "OUT_OF_RANGE")]),
         (body_with(riskBand='"low"'), [("riskBand", "INVALID_VALUE")]),
         (body_with(riskBand="1"), [("riskBand", "INVALID_VALUE")]),
         (body_with(riskBand="[]"), [("riskBand", "INVALID_VALUE")]),
         # A shape error on one field hides bound errors on the others.
-        (body_with(loanAmount="0", riskBand='"NOPE"'), [("riskBand", "INVALID_VALUE")]),
+        (body_with(loanAmount='"0"', riskBand='"NOPE"'), [("riskBand", "INVALID_VALUE")]),
         # Both bound errors are reported together.
         (
-            body_with(loanAmount="0", loanTermInMonths="0"),
+            body_with(loanAmount='"0"', loanTermInMonths="0"),
             [("loanAmount", "OUT_OF_RANGE"), ("loanTermInMonths", "OUT_OF_RANGE")],
         ),
     ],
@@ -148,6 +179,9 @@ def test_invalid_input_returns_field_errors(
         b"[" * 100000,
         body_with(loanAmount="NaN"),
         body_with(loanAmount="Infinity"),
+        # Numbers the JSON decoder itself rejects as too large.
+        body_with(loanTermInMonths="9" * 4301),
+        body_with(loanAmount="1e99999999999999999999"),
     ],
 )
 def test_unparseable_body_returns_400_without_fields(
@@ -244,6 +278,8 @@ def test_config_problems_never_include_the_key(
         {"VENDOR_QUOTE_URL": "http://vendor:abc/quotes"},
         {"VENDOR_QUOTE_URL": "http://vendor:99999/quotes"},
         {"VENDOR_QUOTE_URL": "http://:9000/quotes"},
+        {"VENDOR_QUOTE_URL": "http://ve ndor/quotes"},
+        {"VENDOR_QUOTE_URL": "not a url"},
         {"VENDOR_API_KEY": "   "},
         {"VENDOR_API_KEY": "café"},
         {"VENDOR_TIMEOUT_SECONDS": "0"},
@@ -369,6 +405,8 @@ def test_redirect_is_not_followed(client_for: ClientFactory) -> None:
         (200, b"[]"),
         (200, b'{"commissionRate":0.015,"totalCommission":15}'),
         (200, b'{"quoteId":1,"commissionRate":0.015,"totalCommission":15}'),
+        (200, b'{"quoteId":"","commissionRate":0.015,"totalCommission":15}'),
+        (200, b'{"quoteId":"q","commissionRate":0.015,"totalCommission":"15"}'),
         (200, b'{"quoteId":"q","totalCommission":15}'),
         (200, b'{"quoteId":"q","commissionRate":0.015}'),
         (200, b'{"quoteId":"q","commissionRate":"0.015","totalCommission":15}'),

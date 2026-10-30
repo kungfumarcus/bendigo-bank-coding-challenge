@@ -66,7 +66,7 @@ The spec is in [`docs/`](docs/overview.md).
 - Integration tests of the backend against a running vendor mock
 - Browser end-to-end tests and a CI pipeline
 - Dependency scanning (`pip-audit`, `npm audit`, Dependabot) and pre-commit hooks
-- Localisation of user-facing text; the backend already sends only codes, so this is frontend-only
+- An idempotency key on vendor calls: when a slow reply times out, the vendor may already have issued a quote, and the retry then creates a second one
 
 ## AI usage
 
@@ -88,14 +88,13 @@ The spec is in [`docs/`](docs/overview.md).
 - Ran a web app best practices review and added the agreed hardening
 
 ### Commit 3: Implementation
-- Implemented the vendor mock and its tests from the spec
-- Implemented the backend and its tests from the spec
-- Implemented the frontend and its tests from the spec
-- Wrote the Dockerfiles, `compose.yaml` and nginx config
+- Implemented the docker compose
 - Added run and test steps to this README
 - Ran tests, lint and type checks for all three components
 - Ran the app locally and checked the happy path and a simulated vendor failure in a browser
 - Ran the Docker Compose stack and checked its nginx headers, non-root users and network isolation
-- Followed the README's Docker steps on a copy holding only the files git would track
-- Fixed eight code review findings, added tests for them and updated `docs/backend.md`
-- Ran a code review of the implementation
+- Ran a code review of the implementation and fixed the findings
+- Added decisions D8–D9
+
+### Commit 4: Final Checks
+- Ran a final review, fixed some minor issues and retested

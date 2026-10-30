@@ -129,7 +129,7 @@ export function QuoteForm({
       return;
     }
     onSubmit({
-      loanAmount: Number(values.loanAmount),
+      loanAmount: values.loanAmount,
       loanTermInMonths: Number(values.loanTermInMonths),
       riskBand: values.riskBand as RiskBand,
     });

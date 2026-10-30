@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Annotated
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -29,13 +30,14 @@ class Settings(BaseSettings):
     @field_validator("vendor_quote_url")
     @classmethod
     def url_is_http(cls, value: str) -> str:
+        # Parsed by httpx, so a URL that passes here is one the vendor client can use. httpx alone
+        # accepts port 99999 and a space in the host, and reading .port is what checks the range.
         try:
-            parts = urlsplit(value)
-            # Reading .port is what validates it; urlsplit alone accepts http://host:abc.
-            valid = parts.scheme in ("http", "https") and parts.hostname and (parts.port or True)
-        except ValueError:
-            valid = False
-        if not valid:
+            url = httpx.URL(value)
+            urlsplit(value).port  # noqa: B018
+        except (httpx.InvalidURL, ValueError) as error:
+            raise ValueError("must be an http or https URL with a valid host and port") from error
+        if url.scheme not in ("http", "https") or not url.host or re.search(r"\s", value):
             raise ValueError("must be an http or https URL with a valid host and port")
         return value
 

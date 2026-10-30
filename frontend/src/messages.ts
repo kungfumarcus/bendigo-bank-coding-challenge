@@ -35,7 +35,9 @@ const ERROR_MESSAGES: Record<string, string> = {
 };
 
 export function errorMessage(code: string | undefined): string {
-  return (code !== undefined && ERROR_MESSAGES[code]) || GENERIC_MESSAGE;
+  return code !== undefined && Object.hasOwn(ERROR_MESSAGES, code)
+    ? ERROR_MESSAGES[code]!
+    : GENERIC_MESSAGE;
 }
 
 /** The message for a field's failed rule, or undefined when the pair is not one we know. */
@@ -68,5 +70,7 @@ export function fieldMessage(
       INVALID_VALUE: "Select a risk band.",
     },
   };
-  return messages[field][code];
+  return Object.hasOwn(messages[field], code)
+    ? messages[field][code]
+    : undefined;
 }
