@@ -1,0 +1,41 @@
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    networks:
+      - app-net
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      VENDOR_QUOTE_URL: http://vendor-mock:9000/commission-quotes
+    networks:
+      - app-net
+      - vendor-net
+    healthcheck:
+      # The slim image has no curl.
+      test:
+        - CMD
+        - .venv/bin/python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      - vendor-mock
+
+  vendor-mock:
+    build: ./vendor-mock
+    env_file: ./vendor-mock/.env
+    networks:
+      - vendor-net
+
+networks:
+  app-net:
+  vendor-net:

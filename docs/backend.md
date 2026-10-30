@@ -45,7 +45,7 @@ backend/
 
 - The backend always starts, even when config is missing or invalid
 - Config is read once at startup; a config change takes effect on restart
-- Config is invalid when a required setting is missing or blank, `VENDOR_API_KEY` contains characters not allowed in an HTTP header value (e.g. a newline or non-ASCII), `VENDOR_QUOTE_URL` is not an `http` or `https` URL, or a set value is not a finite number, is not a whole number where one is expected (retries, decimal places, term limits), is negative, has a min above its max, `VENDOR_TIMEOUT_SECONDS` is 0 or less, `FRONTEND_REQUEST_TIMEOUT_SECONDS` is not above the worst case in § Latency, `LOAN_AMOUNT_MIN` is 0 or less, `LOAN_AMOUNT_MAX_DECIMALS` is 0 (amounts are entered in dollars and cents), or `LOAN_TERM_MONTHS_MIN` is below 1
+- Config is invalid when a required setting is missing or blank, `VENDOR_API_KEY` contains characters not allowed in an HTTP header value (e.g. a newline or non-ASCII), `VENDOR_QUOTE_URL` is not an `http` or `https` URL with a valid host and port, or a set value is not a finite number, is not a whole number where one is expected (retries, decimal places, term limits), is negative, has a min above its max, `VENDOR_TIMEOUT_SECONDS` is 0 or less, `FRONTEND_REQUEST_TIMEOUT_SECONDS` is not above the worst case in § Latency, `LOAN_AMOUNT_MIN` is 0 or less, `LOAN_AMOUNT_MAX_DECIMALS` is 0 (amounts are entered in dollars and cents), or `LOAN_TERM_MONTHS_MIN` is below 1
 - Invalid config makes the backend unavailable: status reports `available: false`, and each problem is logged at ERROR on startup
 - A vendor 401 does not make the backend unavailable; each request reports it, and the next request tries the vendor again
 
@@ -83,7 +83,7 @@ Both return `VALIDATION_FAILED` with one entry per failing field.
 - The vendor's reply is parsed with `Decimal`, so `commissionRate` and `totalCommission` reach our response without any float conversion
 - Backoff before a retry: `VENDOR_RETRY_BACKOFF_MS`, plus random jitter of up to half that
 - A 200 whose body breaks the contract is a bad response: `quoteId` missing or not a string; `commissionRate` or `totalCommission` missing, negative, or not a JSON number — numeric strings such as `"0.015"`, booleans, `NaN` and `Infinity` all count as not a number
-- A 4xx other than 401, any 3xx, a 2xx other than 200, or a 200 whose body is not JSON, is also a bad response
+- A 4xx other than 401, any 3xx, a 2xx other than 200, or a 200 whose body cannot be decoded (e.g. a corrupt `Content-Encoding`) or is not JSON, is also a bad response
 - When retries run out, the error code follows the last attempt
 - A vendor 504 is a vendor reply, so it maps to `VENDOR_UNAVAILABLE`; `VENDOR_TIMEOUT` is only for our own timeout
 - A slow vendor reply that arrives after our timeout is discarded

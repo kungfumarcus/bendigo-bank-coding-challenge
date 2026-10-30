@@ -2,6 +2,62 @@
 
 Take-home code challenge: a web app where lending staff enter loan details and get a commission quote from a mock third-party vendor Commission Quote API.
 
+## Run with Docker
+
+Prerequisite: Docker with Compose.
+
+```bash
+cp backend/.env.example backend/.env
+cp vendor-mock/.env.example vendor-mock/.env
+docker compose up --build
+```
+
+Open <http://localhost:8080>. The vendor mock fails about 20% of requests and is slow for about 10% on purpose; the backend retries once, so an occasional error message is expected.
+
+## Run locally
+
+Prerequisites: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 22.
+
+Copy both `.env.example` files to `.env` as above, then in three terminals:
+
+```bash
+cd vendor-mock && uv run uvicorn app.main:app --port 9000
+```
+
+```bash
+cd backend && uv run uvicorn app.main:app --port 8000
+```
+
+```bash
+cd frontend && npm ci && npm run dev
+```
+
+Open the URL Vite prints.
+
+## Tests and checks
+
+In `backend/` and `vendor-mock/`:
+
+```bash
+uv run pytest
+```
+
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run mypy --strict app tests
+```
+
+In `frontend/`:
+
+```bash
+npm test
+```
+
+```bash
+npm run lint && npm run format:check && npm run typecheck
+```
+
+The spec is in [`docs/`](docs/overview.md).
+
 ## With more time
 
 - Vendor key from a secrets manager instead of `.env`
@@ -30,3 +86,16 @@ Take-home code challenge: a web app where lending staff enter loan details and g
 - Added decisions D3–D7
 - Ran thirteen cold spec reviews and addressed their findings
 - Ran a web app best practices review and added the agreed hardening
+
+### Commit 3: Implementation
+- Implemented the vendor mock and its tests from the spec
+- Implemented the backend and its tests from the spec
+- Implemented the frontend and its tests from the spec
+- Wrote the Dockerfiles, `compose.yaml` and nginx config
+- Added run and test steps to this README
+- Ran tests, lint and type checks for all three components
+- Ran the app locally and checked the happy path and a simulated vendor failure in a browser
+- Ran the Docker Compose stack and checked its nginx headers, non-root users and network isolation
+- Followed the README's Docker steps on a copy holding only the files git would track
+- Fixed eight code review findings, added tests for them and updated `docs/backend.md`
+- Ran a code review of the implementation
